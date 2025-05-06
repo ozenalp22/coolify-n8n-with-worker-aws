@@ -1,0 +1,107 @@
+# documentation: https://n8n.io
+# slogan: n8n is an extendable workflow automation tool.
+# tags: n8n,workflow,automation,open,source,low,code
+# logo: svgs/n8n.png
+# port: ${N8N_PORT:-5678}
+
+version: "3.8"
+
+volumes:
+  db_storage:
+  n8n_storage:
+  redis_storage:
+
+services:
+  # ------------------------------------------------------------------ #
+  # PostgreSQL                                                         #
+  # ------------------------------------------------------------------ #
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+      - postgresql-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=$SERVICE_USER_POSTGRES
+      - POSTGRES_PASSWORD=$SERVICE_PASSWORD_POSTGRES
+      - POSTGRES_DB=${POSTGRES_DB:-n8n}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+
+  # ------------------------------------------------------------------ #
+  # **Redis – Bitnami build with env-driven credentials**              #
+  # ------------------------------------------------------------------ #
+  redis:
+    image: bitnami/redis:7.2
+    restart: always
+    environment:
+      - ALLOW_EMPTY_PASSWORD=no
+      - REDIS_USERNAME=${REDIS_USERNAME:-default}      # optional
+      - REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS:-redis_password}  # fallback to a default password
+    volumes:
+      - redis_storage:/bitnami/redis/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$SERVICE_PASSWORD_REDIS\" ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ------------------------------------------------------------------ #
+  # n8n main instance                                                  #
+  # ------------------------------------------------------------------ #
+  n8n:
+    image: docker.n8n.io/n8nio/n8n
+    restart: always
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      - N8N_PORT=${N8N_PORT:-5678}
+      - SERVICE_FQDN_N8N_5678
+      - N8N_EDITOR_BASE_URL=${SERVICE_FQDN_N8N}
+      - WEBHOOK_URL=${SERVICE_FQDN_N8N}
+      - N8N_HOST=${SERVICE_URL_N8N}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+      - DB_POSTGRESDB_USER=${SERVICE_USER_POSTGRES:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${SERVICE_PASSWORD_POSTGRES:-n8n}
+      - EXECUTIONS_MODE=queue
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_BULL_REDIS_PORT=6379
+      - QUEUE_BULL_REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS}
+      - QUEUE_HEALTH_CHECK_ACTIVE=true
+      - N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}
+    volumes:
+      - n8n_storage:/home/node/.n8n
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # ------------------------------------------------------------------ #
+  # n8n worker (same Redis creds)                                      #
+  # ------------------------------------------------------------------ #
+  n8n-worker:
+    image: docker.n8n.io/n8nio/n8n
+    restart: always
+    command: worker
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-n8n}
+      - DB_POSTGRESDB_USER=${SERVICE_USER_POSTGRES:-n8n}
+      - DB_POSTGRESDB_PASSWORD=${SERVICE_PASSWORD_POSTGRES:-n8n}
+      - EXECUTIONS_MODE=queue
+      - QUEUE_BULL_REDIS_HOST=redis
+      - QUEUE_BULL_REDIS_PORT=6379
+      - QUEUE_BULL_REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS}
+      - QUEUE_HEALTH_CHECK_ACTIVE=true
+      - N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}
+    volumes:
+      - n8n_storage:/home/node/.n8n
+    depends_on:
+      - n8n
