@@ -1,3 +1,4 @@
+
 # documentation: https://n8n.io
 # slogan: n8n is an extendable workflow automation tool.
 # tags: n8n,workflow,automation,open,source,low,code
@@ -33,14 +34,11 @@ services:
   # **Redis – Bitnami build with env-driven credentials**              #
   # ------------------------------------------------------------------ #
   redis:
-    image: bitnami/redis:7.2
+    image: redis:7-alpine
     restart: always
-    environment:
-      - ALLOW_EMPTY_PASSWORD=no
-      - REDIS_USERNAME=${REDIS_USERNAME:-default}      # optional
-      - REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS:-redis_password}  # fallback to a default password
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${SERVICE_PASSWORD_REDIS}"]
     volumes:
-      - redis_storage:/bitnami/redis/data
+      - redis_storage:/data
     healthcheck:
       test: ["CMD-SHELL", "redis-cli -a \"$SERVICE_PASSWORD_REDIS\" ping | grep PONG"]
       interval: 5s
@@ -51,7 +49,10 @@ services:
   # n8n main instance                                                  #
   # ------------------------------------------------------------------ #
   n8n:
-    image: docker.n8n.io/n8nio/n8n
+    image: n8n-custom:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     restart: always
     ports:
       - "${N8N_PORT}:5678"
@@ -73,19 +74,35 @@ services:
       - QUEUE_BULL_REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS}
       - QUEUE_HEALTH_CHECK_ACTIVE=true
       - N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_GIT_NODE_DISABLE_BARE_REPOS=true
+      - N8N_ENABLE_EXTERNAL_MODULES=true
+      - N8N_EXTERNAL_MODULES_ALLOWLIST=@aws-sdk/client-s3,@aws-sdk/lib-storage
+      - NODE_FUNCTION_ALLOW_EXTERNAL=@aws-sdk/client-s3,@aws-sdk/lib-storage
+      - NODE_PATH=/home/node/.n8n/lib/node_modules
     volumes:
       - n8n_storage:/home/node/.n8n
+    # Using prebuilt image with AWS SDK baked in
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:5678/healthz >/dev/null 2>&1 || curl -fsS localhost:5678/healthz >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   # ------------------------------------------------------------------ #
   # n8n worker (same Redis creds)                                      #
   # ------------------------------------------------------------------ #
   n8n-worker:
-    image: docker.n8n.io/n8nio/n8n
+    image: n8n-custom:latest
     restart: always
     command: worker
     environment:
@@ -101,7 +118,22 @@ services:
       - QUEUE_BULL_REDIS_PASSWORD=${SERVICE_PASSWORD_REDIS}
       - QUEUE_HEALTH_CHECK_ACTIVE=true
       - N8N_ENCRYPTION_KEY=${SERVICE_BASE64_ENCRYPTIONKEY}
+      - N8N_RUNNERS_ENABLED=true
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - N8N_GIT_NODE_DISABLE_BARE_REPOS=true
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_ENABLE_EXTERNAL_MODULES=true
+      - N8N_EXTERNAL_MODULES_ALLOWLIST=@aws-sdk/client-s3,@aws-sdk/lib-storage
+      - NODE_FUNCTION_ALLOW_EXTERNAL=@aws-sdk/client-s3,@aws-sdk/lib-storage
+      - NODE_PATH=/home/node/.n8n/lib/node_modules
     volumes:
       - n8n_storage:/home/node/.n8n
     depends_on:
       - n8n
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- localhost:5678/healthz >/dev/null 2>&1 || curl -fsS localhost:5678/healthz >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
